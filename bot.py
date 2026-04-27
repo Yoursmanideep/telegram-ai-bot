@@ -16,7 +16,7 @@ def ask_ai(user_text):
             "X-Title": "telegram-bot"
         },
         json={
-            "model": "mistralai/mistral-7b-instruct:free",
+            "model": "openchat/openchat-7b:free",
             "messages": [
                 {"role": "system", "content": "You are a real human chatting casually."},
                 {"role": "user", "content": user_text}
