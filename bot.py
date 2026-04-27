@@ -11,17 +11,26 @@ def ask_ai(user_text):
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com",
+            "X-Title": "telegram-bot"
         },
         json={
             "model": "mistralai/mistral-7b-instruct:free",
             "messages": [
-                {"role": "system", "content": "You are a real human chatting casually. Keep replies short and natural."},
+                {"role": "system", "content": "You are a real human chatting casually."},
                 {"role": "user", "content": user_text}
             ]
         }
     )
-    return response.json()["choices"][0]["message"]["content"]
+
+    data = response.json()
+    print("API RESPONSE:", data)  # VERY IMPORTANT
+
+    if "choices" not in data:
+        return f"Error from AI: {data}"
+
+    return data["choices"][0]["message"]["content"]
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
