@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
 python-telegram-bot==20.7
 requests
 numpy
