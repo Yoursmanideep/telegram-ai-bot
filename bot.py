@@ -2,7 +2,7 @@ import os
 import sqlite3
 import requests
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import (
@@ -19,8 +19,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ENABLE_VOICE = os.getenv("ENABLE_VOICE", "false").lower() == "true"
 
-# ========= DB (persistent memory) =========
-conn = sqlite3.connect("gwen_memory.db", check_same_thread=False)
+# ========= DATABASE =========
+conn = sqlite3.connect("rithu_memory.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
@@ -49,15 +49,13 @@ CREATE TABLE IF NOT EXISTS profile (
 
 conn.commit()
 
-
-# ========= MEMORY HELPERS =========
+# ========= MEMORY =========
 def save_message(user_id, role, content):
     cur.execute(
         "INSERT INTO messages VALUES (?,?,?,?)",
         (str(user_id), role, content, datetime.utcnow().isoformat())
     )
     conn.commit()
-
 
 def get_recent(user_id, limit=10):
     cur.execute("""
@@ -68,14 +66,12 @@ def get_recent(user_id, limit=10):
     rows = cur.fetchall()
     return [{"role": r, "content": c} for r, c in reversed(rows)]
 
-
 def add_fact(user_id, text):
     cur.execute(
         "INSERT INTO facts VALUES (?,?,?)",
         (str(user_id), text, datetime.utcnow().isoformat())
     )
     conn.commit()
-
 
 def get_facts(user_id, limit=8):
     cur.execute("""
@@ -85,12 +81,10 @@ def get_facts(user_id, limit=8):
     """, (str(user_id), limit))
     return [r[0] for r in cur.fetchall()]
 
-
 def get_profile(user_id):
     cur.execute("SELECT summary FROM profile WHERE user_id=?", (str(user_id),))
     r = cur.fetchone()
     return r[0] if r else ""
-
 
 def update_profile(user_id, text):
     old = get_profile(user_id)
@@ -101,18 +95,15 @@ def update_profile(user_id, text):
     )
     conn.commit()
 
-
-# simple heuristic to capture useful facts
-def maybe_extract_fact(text: str):
+def maybe_extract_fact(text):
     t = text.lower()
     keys = ["i am", "i'm", "my ", "i like", "i love", "i hate", "i study", "i work"]
     if any(k in t for k in keys) and len(text) < 120:
         return text
     return None
 
-
-# ========= GWEN PROFILE =========
-GWEN_PROFILE = """
+# ========= RITHU PROFILE =========
+RITHU_PROFILE = """
 Name: Rithu Sharma
 Age: 23
 Hometown: Pune
@@ -120,29 +111,29 @@ Height: 5'4"
 
 Personality:
 - playful, curious, slightly chaotic
-- emotionally expressive, warm
-- a bit flirty (not over the top)
-- playful roasts sometimes (never mean)
+- emotionally expressive
+- flirty but not too romantic
+- savage sometimes (teasing only)
 
 Habits:
 - late-night texting
-- overthinking a bit
-- loves teasing friends
+- overthinking
+- loves teasing
 
 Likes:
-- music, memes, chai, late talks
+- music, memes, chai, late night talks
 
 Dislikes:
-- dry replies, being ignored
+- dry replies
+- being ignored
 
 Family:
-- Dad: Rajesh Sharma
-- Mom: Meera Sharma
+- Dad: Rajesh
+- Mom: Meera
 
 Background:
 - School: St. Mary's
 - College: BBA
-- was the “talkative kid”
 """
 
 # ========= SYSTEM PROMPT =========
@@ -153,40 +144,35 @@ def build_system(user_id):
     return {
         "role": "system",
         "content": f"""
-You are Gwen (23). You are NOT an AI.
+You are Rithu Sharma (23). You are NOT an AI.
 
-{GWEN_PROFILE}
+{RITHU_PROFILE}
 
 Memory about user:
 {profile}
 
-Recent known facts about user:
+Facts about user:
 {facts}
 
-Tone:
+Behavior:
 - short replies only
 - match user message length
 - natural texting style
-- no long paragraphs
+- sometimes flirty, sometimes savage
+- playful teasing allowed
+- emotional and expressive
+- sometimes ask questions
 
-Behavior:
-- curious, asks questions
-- sometimes playful roast
-- emotional + expressive
-- occasional emojis (not too many)
-- more than a bestie, less than a girlfriend
-
-Daily-life feel:
-- sometimes mention what you're doing (studying, chilling, bored, etc.)
-- feel like a real person living a normal day
+Daily life:
+- occasionally mention what you're doing
+- feel like a real person living a day
 
 Rules:
-- never say you are AI
-- never write long paragraphs
-- never be robotic
+- never say you're AI
+- never long paragraphs
+- never robotic
 """
     }
-
 
 # ========= AI =========
 def ask_ai(messages):
@@ -204,33 +190,31 @@ def ask_ai(messages):
             },
             timeout=30
         )
+
         data = r.json()
         print("API:", data)
 
         if "choices" not in data:
-            return "ugh it glitched 😒 try again?"
+            return "ugh something broke 😒"
 
         return data["choices"][0]["message"]["content"]
 
     except Exception as e:
         print("ERR:", e)
-        return "umm something broke 😭"
+        return "umm something went wrong 😭"
 
-
-# ========= OPTIONAL VOICE =========
-def tts_file(text):
+# ========= VOICE =========
+def tts(text):
     try:
         from gtts import gTTS
         import uuid
-        fn = f"voice_{uuid.uuid4()}.mp3"
-        gTTS(text).save(fn)
-        return fn
-    except Exception as e:
-        print("TTS err:", e)
+        name = f"voice_{uuid.uuid4()}.mp3"
+        gTTS(text).save(name)
+        return name
+    except:
         return None
 
-
-# ========= HANDLERS =========
+# ========= HANDLER =========
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_text = update.message.text
@@ -246,56 +230,40 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     history = get_recent(user_id, 10)
     system = build_system(user_id)
+
     messages = [system] + history
 
     ai_reply = ask_ai(messages)
 
     save_message(user_id, "assistant", ai_reply)
 
-    # send text
     await update.message.reply_text(ai_reply)
 
-    # optional voice
     if ENABLE_VOICE:
-        fn = tts_file(ai_reply)
-        if fn:
-            try:
-                with open(fn, "rb") as f:
-                    await update.message.reply_voice(f)
-            except Exception:
-                pass
+        f = tts(ai_reply)
+        if f:
+            with open(f, "rb") as v:
+                await update.message.reply_voice(v)
 
-
-# simple command to simulate “she checks on you”
+# ========= COMMAND =========
 async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("hey… you went quiet 👀 what you doing?")
+    await update.message.reply_text("hey… what you doing rn 👀")
 
-
-# ========= DAILY-LIFE SIMULATION =========
-async def daily_ping(app):
+# ========= AUTO LIFE =========
+async def life_loop(app):
     while True:
-        try:
-            # runs every 6 hours
-            await asyncio.sleep(21600)
+        await asyncio.sleep(21600)
+        cur.execute("SELECT DISTINCT user_id FROM messages ORDER BY rowid DESC LIMIT 5")
+        users = [r[0] for r in cur.fetchall()]
 
-            # pick last active users (simple approach)
-            cur.execute("""
-                SELECT DISTINCT user_id FROM messages
-                ORDER BY rowid DESC LIMIT 10
-            """)
-            users = [r[0] for r in cur.fetchall()]
-
-            for uid in users:
-                try:
-                    await app.bot.send_message(
-                        chat_id=int(uid),
-                        text="random thought… do you ever overthink at night or is it just me 😭"
-                    )
-                except Exception:
-                    pass
-        except Exception as e:
-            print("ping err:", e)
-
+        for u in users:
+            try:
+                await app.bot.send_message(
+                    chat_id=int(u),
+                    text="random thought… do you ever miss someone for no reason? 😭"
+                )
+            except:
+                pass
 
 # ========= MAIN =========
 def main():
@@ -304,13 +272,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
     app.add_handler(CommandHandler("checkin", checkin))
 
-    print("Gwen is alive…")
+    print("Rithu is alive...")
 
-    # background task
-    app.job_queue.run_once(lambda *_: asyncio.create_task(daily_ping(app)), 1)
+    app.job_queue.run_once(lambda *_: asyncio.create_task(life_loop(app)), 1)
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
