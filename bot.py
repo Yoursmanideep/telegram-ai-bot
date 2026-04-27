@@ -8,27 +8,25 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 def ask_ai(user_text):
     response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
+        "https://api.groq.com/openai/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com",
-            "X-Title": "telegram-bot"
+            "Content-Type": "application/json"
         },
         json={
-            "model": "openrouter/auto",
+            "model": "llama3-8b-8192",
             "messages": [
-                {"role": "system", "content": "You are a real human chatting casually."},
+                {"role": "system", "content": "You are a real human chatting casually. Keep it short and natural."},
                 {"role": "user", "content": user_text}
             ]
         }
     )
 
     data = response.json()
-    print("API RESPONSE:", data)  # VERY IMPORTANT
+    print("API RESPONSE:", data)
 
     if "choices" not in data:
-        return f"Error from AI: {data}"
+        return f"Error: {data}"
 
     return data["choices"][0]["message"]["content"]
 
