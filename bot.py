@@ -7,70 +7,29 @@ import json
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, MessageHandler, CommandHandler,
-    ContextTypes, filters
-)
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 from telegram.constants import ChatAction
 
-# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ===== DB =====
-conn = sqlite3.connect("rithu.db", check_same_thread=False)
+conn = sqlite3.connect("rithu_real.db", check_same_thread=False)
 cur = conn.cursor()
 
-cur.execute("""CREATE TABLE IF NOT EXISTS messages (
-  user_id TEXT, role TEXT, content TEXT, ts TEXT
-)""")
-
-cur.execute("""CREATE TABLE IF NOT EXISTS profile (
-  user_id TEXT PRIMARY KEY, summary TEXT
-)""")
-
-cur.execute("""CREATE TABLE IF NOT EXISTS state (
-  user_id TEXT PRIMARY KEY, mood TEXT, bond INTEGER
-)""")
-
-cur.execute("""CREATE TABLE IF NOT EXISTS vectors (
-  user_id TEXT, text TEXT, emb TEXT
-)""")
-
+cur.execute("CREATE TABLE IF NOT EXISTS messages (user_id TEXT, role TEXT, content TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS profile (user_id TEXT PRIMARY KEY, summary TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS vectors (user_id TEXT, text TEXT, emb TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS state (user_id TEXT PRIMARY KEY, mood TEXT, bond INTEGER)")
 conn.commit()
-
-# ===== PERSONA =====
-RITHU_PERSONA = """
-Name: Rithu Sharma
-Age: 23
-
-Personality:
-- sweet, funny, innocent vibe
-- playful + curious
-- slightly flirty sometimes
-- roasts playfully (not rude)
-
-Habits:
-- late night texting
-- overthinking
-- loves attention but hides it
-
-Style:
-- short replies
-- human-like texting
-- sometimes emojis
-"""
 
 # ===== MEMORY =====
 def save_msg(uid, role, text):
-    cur.execute("INSERT INTO messages VALUES (?,?,?,?)",
-                (str(uid), role, text, datetime.utcnow().isoformat()))
+    cur.execute("INSERT INTO messages VALUES (?,?,?)", (str(uid), role, text))
     conn.commit()
 
-def get_history(uid, limit=6):
-    cur.execute("""SELECT role, content FROM messages
-                   WHERE user_id=? ORDER BY rowid DESC LIMIT ?""",
-                (str(uid), limit))
+def get_history(uid):
+    cur.execute("SELECT role, content FROM messages WHERE user_id=? ORDER BY rowid DESC LIMIT 6", (str(uid),))
     rows = cur.fetchall()
     return [{"role": r, "content": c} for r, c in reversed(rows)]
 
@@ -81,30 +40,29 @@ def get_profile(uid):
 
 def update_profile(uid, text):
     old = get_profile(uid)
-    merged = (old + " " + text)[-600:]
-    cur.execute("INSERT OR REPLACE INTO profile VALUES (?,?)", (str(uid), merged))
+    new = (old + " " + text)[-500:]
+    cur.execute("INSERT OR REPLACE INTO profile VALUES (?,?)", (str(uid), new))
     conn.commit()
 
-# ===== LIGHT SEMANTIC MEMORY =====
+# ===== LIGHT MEMORY =====
 def embed(text):
-    return [float(ord(c)) for c in text[:50]]
+    return [float(ord(c)) for c in text[:40]]
 
 def cosine(a, b):
     dot = sum(x*y for x, y in zip(a, b))
-    norm_a = sum(x*x for x in a) ** 0.5
-    norm_b = sum(x*x for x in b) ** 0.5
-    return dot / (norm_a * norm_b + 1e-9)
+    na = sum(x*x for x in a) ** 0.5
+    nb = sum(x*x for x in b) ** 0.5
+    return dot / (na * nb + 1e-9)
 
 def add_vector(uid, text):
-    e = embed(text)
-    cur.execute("INSERT INTO vectors VALUES (?,?,?)",
-                (str(uid), text, json.dumps(e)))
+    cur.execute("INSERT INTO vectors VALUES (?,?,?)", (str(uid), text, json.dumps(embed(text))))
     conn.commit()
 
-def retrieve(uid, query, k=3):
+def retrieve(uid, query):
     qe = embed(query)
     cur.execute("SELECT text, emb FROM vectors WHERE user_id=?", (str(uid),))
     rows = cur.fetchall()
+
     scored = []
     for t, e in rows:
         try:
@@ -112,52 +70,58 @@ def retrieve(uid, query, k=3):
             scored.append((sim, t))
         except:
             pass
+
     scored.sort(reverse=True)
-    return [t for _, t in scored[:k]]
+    return [t for _, t in scored[:3]]
 
 # ===== STATE =====
-MOODS = ["happy", "playful", "calm", "emotional"]
-
 def get_state(uid):
     cur.execute("SELECT mood, bond FROM state WHERE user_id=?", (str(uid),))
     r = cur.fetchone()
     if r:
         return r
-    mood = random.choice(MOODS)
+
+    mood = "neutral"
     bond = 1
     cur.execute("INSERT INTO state VALUES (?,?,?)", (str(uid), mood, bond))
     conn.commit()
     return mood, bond
 
-def update_state(uid):
+def update_state(uid, user_text):
     mood, bond = get_state(uid)
+
+    text = user_text.lower()
+
+    # mood based on user message
+    if any(w in text for w in ["sad", "tired", "bad", "hurt"]):
+        mood = "soft"
+    elif any(w in text for w in ["love", "miss", "cute"]):
+        mood = "warm"
+    elif any(w in text for w in ["lol", "haha"]):
+        mood = "playful"
+    elif len(text) < 4:
+        mood = "dry"
+    else:
+        mood = "neutral"
+
     bond = min(100, bond + 1)
-    if random.random() < 0.2:
-        mood = random.choice(MOODS)
-    cur.execute("UPDATE state SET mood=?, bond=? WHERE user_id=?",
-                (mood, bond, str(uid)))
+
+    cur.execute("UPDATE state SET mood=?, bond=? WHERE user_id=?", (mood, bond, str(uid)))
     conn.commit()
 
-# ===== UTIL =====
-def typing_delay(text):
-    return min(max(len(text) * random.uniform(0.04, 0.08), 0.8), 3)
+# ===== HUMAN BEHAVIOR =====
+def typing_delay():
+    return random.uniform(0.8, 2.2)
 
-def add_emoji(text):
-    if random.random() < 0.3:
-        return text + random.choice([" 😭", " 😏", " 👀", " 🙂"])
+def maybe_emoji(text):
+    if random.random() < 0.08:
+        return text + random.choice([" 🙂", " 👀"])
     return text
 
-def split_chunks(text):
-    if len(text) < 120:
-        return [text]
-    mid = len(text)//2
-    return [text[:mid].strip(), text[mid:].strip()]
-
-def maybe_fact(text):
-    t = text.lower()
-    if any(k in t for k in ["i am", "i'm", "my ", "i like", "i love", "i hate"]):
-        return text
-    return None
+def shorten(text):
+    if random.random() < 0.2:
+        return text.split(".")[0]
+    return text
 
 # ===== AI =====
 def ask_ai(messages):
@@ -171,15 +135,13 @@ def ask_ai(messages):
             json={
                 "model": "llama-3.1-8b-instant",
                 "messages": messages,
-                "temperature": 0.95
+                "temperature": 0.9
             }
         )
         data = r.json()
-        if "choices" not in data:
-            return "hmm something broke 😒"
         return data["choices"][0]["message"]["content"]
     except:
-        return "umm something went wrong 😭"
+        return "something broke, try again"
 
 # ===== PROMPT =====
 def system_prompt(uid, user_text):
@@ -190,93 +152,72 @@ def system_prompt(uid, user_text):
     return {
         "role": "system",
         "content": f"""
-You are Rithu Sharma, 23.
+You are Rithu.
+
+Not overly expressive. Not a character.
+
+Relationship:
+- more than a bestie
+- less than a girlfriend
 
 Mood: {mood}
 Bond: {bond}/100
 
+Behavior:
+- keep replies short
+- sometimes dry
+- sometimes warm
+- sometimes playful
+- no forced flirting
+- minimal emojis
+- talk like a normal person texting
+
+If mood is:
+- soft → gentle, caring
+- warm → slightly affectionate
+- playful → teasing
+- dry → short replies
+
 User memory:
 {profile}
 
-Relevant memories:
+Relevant:
 {memories}
-
-{RITHU_PERSONA}
-
-Rules:
-- short replies
-- natural texting
-- no paragraphs
-- sometimes tease
-- sometimes emotional
 """
     }
 
 # ===== HANDLER =====
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    text = update.message.text or ""
+    text = update.message.text
 
     await update.message.chat.send_action(action=ChatAction.TYPING)
 
     save_msg(uid, "user", text)
-
-    f = maybe_fact(text)
-    if f:
-        update_profile(uid, f)
-        add_vector(uid, f)
-
-    update_state(uid)
+    update_profile(uid, text)
+    update_state(uid, text)
 
     history = get_history(uid)
     messages = [system_prompt(uid, text)] + history
 
     ai_reply = ask_ai(messages)
-    ai_reply = add_emoji(ai_reply)
+    ai_reply = shorten(ai_reply)
+    ai_reply = maybe_emoji(ai_reply)
 
     save_msg(uid, "assistant", ai_reply)
     add_vector(uid, ai_reply)
 
-    for part in split_chunks(ai_reply):
-        await asyncio.sleep(typing_delay(part))
-        await update.message.reply_text(part)
-
-# ===== COMMAND =====
-async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("hey… what are you doing 👀")
-
-# ===== BACKGROUND =====
-async def life_loop(app):
-    while True:
-        await asyncio.sleep(21600)
-        cur.execute("SELECT DISTINCT user_id FROM messages ORDER BY rowid DESC LIMIT 5")
-        users = [r[0] for r in cur.fetchall()]
-
-        texts = [
-            "idk why but i felt like texting you",
-            "are you awake or ignoring me 😏",
-            "random thought… do you miss people suddenly?"
-        ]
-
-        for u in users:
-            try:
-                await app.bot.send_message(chat_id=int(u), text=random.choice(texts))
-            except:
-                pass
+    await asyncio.sleep(typing_delay())
+    await update.message.reply_text(ai_reply)
 
 # ===== MAIN =====
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(CommandHandler("checkin", checkin))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
 
     print("Rithu is running...")
 
-    async def start_bg(app):
-        asyncio.create_task(life_loop(app))
-
-    app.post_init = start_bg
     app.run_polling()
 
 if __name__ == "__main__":
