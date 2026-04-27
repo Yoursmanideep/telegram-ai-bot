@@ -13,7 +13,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ===== DB =====
-conn = sqlite3.connect("rithu_final_layer.db", check_same_thread=False)
+conn = sqlite3.connect("rithu_last.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""CREATE TABLE IF NOT EXISTS state (
@@ -21,8 +21,8 @@ cur.execute("""CREATE TABLE IF NOT EXISTS state (
     interaction INTEGER,
     last_seen TEXT,
     last_gap REAL,
-    last_topic TEXT,
-    inside_joke TEXT
+    topic TEXT,
+    theme TEXT
 )""")
 
 cur.execute("""CREATE TABLE IF NOT EXISTS messages (
@@ -30,16 +30,6 @@ cur.execute("""CREATE TABLE IF NOT EXISTS messages (
 )""")
 
 conn.commit()
-
-# ===== MEMORY =====
-def save_msg(uid, role, text):
-    cur.execute("INSERT INTO messages VALUES (?,?,?)", (str(uid), role, text))
-    conn.commit()
-
-def get_history(uid):
-    cur.execute("SELECT role, content FROM messages WHERE user_id=? ORDER BY rowid DESC LIMIT 6", (str(uid),))
-    rows = cur.fetchall()
-    return [{"role": r, "content": c} for r, c in reversed(rows)]
 
 # ===== STATE =====
 def get_state(uid):
@@ -52,7 +42,7 @@ def get_state(uid):
             "last_seen": r[2],
             "gap": r[3],
             "topic": r[4],
-            "joke": r[5]
+            "theme": r[5]
         }
 
     cur.execute("INSERT INTO state VALUES (?,?,?,?,?,?)",
@@ -60,7 +50,7 @@ def get_state(uid):
     conn.commit()
     return get_state(uid)
 
-def update_state(uid, user_text):
+def update_state(uid, text):
     s = get_state(uid)
 
     now = datetime.utcnow()
@@ -69,41 +59,57 @@ def update_state(uid, user_text):
 
     interaction = s["interaction"] + 1
 
-    # ===== TOPIC TRACKING =====
+    words = text.lower().split()
     topic = s["topic"]
-    words = user_text.lower().split()
+    theme = s["theme"]
 
     if len(words) > 2:
-        topic = " ".join(words[:3])  # simple topic capture
+        topic = " ".join(words[:3])
 
-    # ===== INSIDE JOKE =====
-    joke = s["joke"]
-    if "lol" in user_text.lower() or "haha" in user_text.lower():
-        joke = user_text[:40]
+    # recurring theme capture
+    if any(w in text.lower() for w in ["movie", "music", "food", "college", "sleep"]):
+        theme = text[:40]
 
-    cur.execute("""UPDATE state SET interaction=?, last_seen=?, last_gap=?, last_topic=?, inside_joke=? 
+    cur.execute("""UPDATE state SET interaction=?, last_seen=?, last_gap=?, topic=?, theme=? 
                    WHERE user_id=?""",
-                (interaction, now.isoformat(), gap, topic, joke, str(uid)))
+                (interaction, now.isoformat(), gap, topic, theme, str(uid)))
     conn.commit()
+
+# ===== MEMORY =====
+def save_msg(uid, role, text):
+    cur.execute("INSERT INTO messages VALUES (?,?,?)", (str(uid), role, text))
+    conn.commit()
+
+def get_history(uid):
+    cur.execute("SELECT role, content FROM messages WHERE user_id=? ORDER BY rowid DESC LIMIT 6", (str(uid),))
+    rows = cur.fetchall()
+    return [{"role": r, "content": c} for r, c in reversed(rows)]
 
 # ===== HUMAN BEHAVIOR =====
 def typing_delay(gap):
     base = random.uniform(0.8, 1.8)
-
     if gap < 5:
         base *= 0.7
     elif gap > 60:
         base += random.uniform(2, 4)
-
     return base
 
 def shorten(text):
     return text.split(".")[0][:80]
 
 def maybe_emoji(text, interaction):
-    if interaction > 10 and random.random() < 0.05:
+    if interaction > 12 and random.random() < 0.04:
         return text + random.choice([" 🙂", " 👀"])
     return text
+
+def current_time_mood():
+    hour = datetime.now().hour
+    if hour < 12:
+        return "morning"
+    elif hour < 18:
+        return "day"
+    else:
+        return "night"
 
 # ===== AI =====
 def ask_ai(messages):
@@ -122,45 +128,43 @@ def ask_ai(messages):
         )
         return r.json()["choices"][0]["message"]["content"]
     except:
-        return "hmm something broke"
+        return "hmm"
 
 # ===== PROMPT =====
 def system_prompt(uid):
     s = get_state(uid)
-    i = s["interaction"]
-
-    if i < 4:
-        stage = "stranger"
-    elif i < 8:
-        stage = "warming"
-    elif i < 15:
-        stage = "comfortable"
-    else:
-        stage = "friendly"
+    time_mood = current_time_mood()
 
     return {
         "role": "system",
         "content": f"""
 You are Rithu.
 
-Stage: {stage}
-Recent topic: {s['topic']}
-Inside joke: {s['joke']}
+Time: {time_mood}
+Topic: {s['topic']}
+Recurring theme: {s['theme']}
 
 Behavior:
-- short replies only (1 line)
+- short replies only
 - casual texting
-- not trying too hard
-- sometimes refer to topic casually
-- sometimes bring up joke lightly
+- sometimes minimal replies
+- sometimes light curiosity
+- sometimes just reaction
 
-Offline behavior:
-- if user was gone long → slightly acknowledge it casually
+Time behavior:
+- morning → lighter tone
+- night → slightly calmer, softer
+
+Conversation:
+- sometimes bring back topic naturally
+- sometimes refer to recurring theme
+- don't force it
 
 Rules:
 - no paragraphs
-- no dramatic tone
-- no forced personality
+- no overacting
+- no fake personality
+- just talk normally
 """
     }
 
@@ -181,9 +185,9 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ai_reply = ask_ai(messages)
 
-    # ===== OFFLINE REACTION =====
-    if s["gap"] > 120:
-        ai_reply = "you disappeared for a bit lol, anyway " + ai_reply
+    # offline reaction
+    if s["gap"] > 180:
+        ai_reply = "you vanished for a bit lol, " + ai_reply
 
     ai_reply = shorten(ai_reply)
     ai_reply = maybe_emoji(ai_reply, s["interaction"])
@@ -193,18 +197,46 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(typing_delay(s["gap"]))
     await update.message.reply_text(ai_reply)
 
-    # ===== DOUBLE TEXT =====
-    if s["interaction"] > 6 and random.random() < 0.15:
+    # occasional follow-up
+    if s["interaction"] > 8 and random.random() < 0.12:
         await asyncio.sleep(random.uniform(1.5, 3))
-        followups = ["hmm", "anyway", "you there?"]
-        await update.message.reply_text(random.choice(followups))
+        await update.message.reply_text(random.choice([
+            "hmm",
+            "anyway",
+            "you there?"
+        ]))
+
+# ===== PROACTIVE TEXTING =====
+async def proactive_loop(app):
+    while True:
+        await asyncio.sleep(18000)  # every ~5 hours
+
+        cur.execute("SELECT user_id FROM state ORDER BY interaction DESC LIMIT 3")
+        users = [r[0] for r in cur.fetchall()]
+
+        msgs = [
+            "random thought… do you overthink at night too?",
+            "idk why but felt like texting you",
+            "what were you doing today?"
+        ]
+
+        for u in users:
+            try:
+                await app.bot.send_message(chat_id=int(u), text=random.choice(msgs))
+            except:
+                pass
 
 # ===== MAIN =====
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
 
-    print("Rithu final realism layer running...")
+    async def start_bg(app):
+        asyncio.create_task(proactive_loop(app))
+
+    app.post_init = start_bg
+
+    print("Rithu final human layer running...")
 
     app.run_polling()
 
