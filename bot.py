@@ -12,7 +12,7 @@ from telegram.constants import ChatAction
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ================= DATABASE =================
+# ================= DB =================
 conn = sqlite3.connect("rithu.db", check_same_thread=False)
 cur = conn.cursor()
 
@@ -38,43 +38,51 @@ def get_profile(uid):
 
 def update_profile(uid, text):
     old = get_profile(uid)
-    new = (old + " " + text)[-500:]
+    new = (old + " " + text)[-400:]
     cur.execute("INSERT OR REPLACE INTO profile VALUES (?,?)", (str(uid), new))
     conn.commit()
 
 # ================= STATE =================
+MOODS = ["happy", "playful", "calm", "thoughtful"]
+
 def get_state(uid):
     cur.execute("SELECT mood, bond FROM state WHERE user_id=?", (str(uid),))
     r = cur.fetchone()
     if r:
         return r
-    mood = random.choice(["happy", "playful", "low", "flirty"])
+    mood = random.choice(MOODS)
     bond = 1
     cur.execute("INSERT INTO state VALUES (?,?,?)", (str(uid), mood, bond))
     conn.commit()
     return mood, bond
 
-def update_bond(uid, text):
-    cur.execute("SELECT bond FROM state WHERE user_id=?", (str(uid),))
+def update_state(uid):
+    cur.execute("SELECT mood, bond FROM state WHERE user_id=?", (str(uid),))
     r = cur.fetchone()
-    if r:
-        bond = min(100, r[1] + 1)
-        cur.execute("UPDATE state SET bond=? WHERE user_id=?", (bond, str(uid)))
-        conn.commit()
+    if not r:
+        return
+    mood, bond = r
+    bond = min(100, bond + 1)
 
-# ================= TIME =================
-def get_time_context():
-    h = datetime.now().hour
-    if h < 12:
-        return "morning"
-    elif h < 18:
-        return "afternoon"
-    return "night"
+    if random.random() < 0.15:
+        mood = random.choice(MOODS)
+
+    cur.execute("UPDATE state SET mood=?, bond=? WHERE user_id=?", (mood, bond, str(uid)))
+    conn.commit()
+
+# ================= HUMAN TOUCH =================
+def typing_delay(text):
+    return min(max(len(text) * random.uniform(0.03, 0.07), 0.8), 2.5)
+
+def add_emoji(text):
+    if random.random() < 0.25:
+        return text + random.choice([" 🙂", " 😅", " 👀", " 😄"])
+    return text
 
 # ================= AI =================
 def ask_ai(messages):
     try:
-        res = requests.post(
+        r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -86,44 +94,35 @@ def ask_ai(messages):
                 "temperature": 0.9
             }
         )
-
-        data = res.json()
+        data = r.json()
         if "choices" not in data:
-            return "ugh something broke 😒"
-
+            return "hmm something went off, try again?"
         return data["choices"][0]["message"]["content"]
-
     except:
-        return "umm something went wrong 😭"
+        return "oops something broke 😅"
 
-# ================= SYSTEM PROMPT =================
+# ================= PROMPT =================
 def system_prompt(uid):
     mood, bond = get_state(uid)
     profile = get_profile(uid)
-    time_ctx = get_time_context()
 
     return {
         "role": "system",
         "content": f"""
-You are Rithu Sharma, 23.
-
-Personality:
-- playful, emotional, curious
-- slightly flirty
-- sometimes savage (fun way)
+You are Rithu Sharma, 23, chatting casually.
 
 Mood: {mood}
 Bond: {bond}/100
-Time: {time_ctx}
 
-User memory:
+User info:
 {profile}
 
-Rules:
-- short replies only
-- natural texting style
-- no paragraphs
-- sometimes ask questions
+Style:
+- short replies
+- natural texting
+- slightly playful
+- emotionally aware
+- no long paragraphs
 """
     }
 
@@ -134,54 +133,35 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.chat.send_action(action=ChatAction.TYPING)
 
-    await asyncio.sleep(random.uniform(1, 3))
-
     save_msg(uid, "user", text)
     update_profile(uid, text)
-    update_bond(uid, text)
+    update_state(uid)
 
     history = get_history(uid)
     messages = [system_prompt(uid)] + history
 
     ai_reply = ask_ai(messages)
+    ai_reply = add_emoji(ai_reply)
 
     save_msg(uid, "assistant", ai_reply)
 
+    await asyncio.sleep(typing_delay(ai_reply))
     await update.message.reply_text(ai_reply)
 
 # ================= COMMAND =================
 async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("hey… what are you doing rn 👀")
-
-# ================= LIFE LOOP =================
-async def life_loop(app):
-    while True:
-        await asyncio.sleep(21600)
-
-        cur.execute("SELECT DISTINCT user_id FROM messages ORDER BY rowid DESC LIMIT 5")
-        users = [r[0] for r in cur.fetchall()]
-
-        for u in users:
-            try:
-                await app.bot.send_message(
-                    chat_id=int(u),
-                    text="random thought… do you overthink at night too? 😭"
-                )
-            except:
-                pass
+    await update.message.reply_text("hey, what's up?")
 
 # ================= MAIN =================
-async def start():
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
     app.add_handler(CommandHandler("checkin", checkin))
 
-    print("Rithu is alive...")
+    print("Rithu is running...")
 
-    asyncio.create_task(life_loop(app))
-
-    await app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(start())
+    main()
