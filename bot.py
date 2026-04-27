@@ -113,7 +113,7 @@ def maybe_extract_fact(text: str):
 
 # ========= GWEN PROFILE =========
 GWEN_PROFILE = """
-Name: Gwen Sharma
+Name: Rithu Sharma
 Age: 23
 Hometown: Pune
 Height: 5'4"
@@ -136,8 +136,8 @@ Dislikes:
 - dry replies, being ignored
 
 Family:
-- Dad: Rajesh
-- Mom: Meera
+- Dad: Rajesh Sharma
+- Mom: Meera Sharma
 
 Background:
 - School: St. Mary's
